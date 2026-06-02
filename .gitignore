@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# ROS build artifacts
+build/
+devel/
+logs/
+*.bag
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Auto-generated logs & plots (can always regenerate)
+scripts/*.csv
+scripts/*.png
