@@ -40,7 +40,7 @@ class DrydenTurbulence:
     前向欧拉离散化保证输出方差接近连续理论值。
     """
 
-    def __init__(self, dt, U0=10.0,
+    def __init__(self, dt, U0=10.0, u_ref=None,
                  Lu=150.0, Lv=150.0, Lw=50.0,
                  sigma_u=4.0, sigma_v=4.0, sigma_w=2.5):
         self.dt = dt
@@ -143,11 +143,11 @@ class DrydenTurbulence:
 class WindField:
     """极端湍流风场, ENU 坐标系输出"""
 
-    def __init__(self, dt=0.05):
+    def __init__(self, dt=0.05, u_ref=None):
         self.dt = dt
 
         # ── 平均风 (幂律剖面) ─────────────────────────
-        self.u_ref = 12.0          # 10m 参考风速 [m/s]
+        self.u_ref = u_ref if u_ref is not None else 12.0  # 10m 参考风速 [m/s]
         self.z_ref = 10.0          # 参考高度 [m]
         self.alpha = 0.35          # 风切变指数 (城市/森林: 极端)
         self.wind_dir = np.deg2rad(45.0)  # 风向 45° (东北风, 气象惯例: 来向)
@@ -272,12 +272,12 @@ class WindField:
 class WindFieldNode:
     """ROS 节点: 订阅 odometry, 计算风场, 通过 Gazebo 施加气动阻力"""
 
-    def __init__(self, rate_hz=20, debug=False, no_wrench=False):
+    def __init__(self, rate_hz=20, debug=False, no_wrench=False, u_ref=12.0):
         rospy.init_node('wind_field_node', log_level=rospy.INFO)
 
         self.dt = 1.0 / rate_hz
         self.debug = debug
-        self.wind = WindField(dt=self.dt)
+        self.wind = WindField(dt=self.dt, u_ref=u_ref)
 
         # 无人机状态
         self._pos = np.zeros(3)       # ENU 位置 [m]
@@ -502,6 +502,7 @@ if __name__ == '__main__':
     parser.add_argument('--debug', action='store_true', help='每步打印日志')
     parser.add_argument('--no-wrench', action='store_true', help='不施加力,仅记录')
     parser.add_argument('--seed', type=int, default=None, help='随机种子 (可复现风场)')
+    parser.add_argument('--u-ref', type=float, default=5.0, help='10m 参考风速 m/s (默认 5)')
     parser.add_argument('--test', action='store_true', help='离线测试 (无需 ROS/Gazebo)')
     args = parser.parse_args()
     # 固定随机种子
@@ -515,7 +516,8 @@ if __name__ == '__main__':
         try:
             WindFieldNode(rate_hz=args.rate,
                           debug=args.debug,
-                          no_wrench=args.no_wrench).run()
+                          no_wrench=args.no_wrench,
+                          u_ref=args.u_ref).run()
         except rospy.ROSInterruptException:
             pass
         except KeyboardInterrupt:
