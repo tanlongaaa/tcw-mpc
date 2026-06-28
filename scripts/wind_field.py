@@ -143,28 +143,34 @@ class DrydenTurbulence:
 class WindField:
     """极端湍流风场, ENU 坐标系输出"""
 
-    def __init__(self, dt=0.05, u_ref=None):
+    def __init__(self, dt=0.05, u_ref=None,
+                 sigma_scale=1.0, gust_w_max=2.0, alpha=0.35,
+                 sigma_u=4.0, sigma_v=4.0, sigma_w=2.5):
         self.dt = dt
 
         # ── 平均风 (幂律剖面) ─────────────────────────
         self.u_ref = u_ref if u_ref is not None else 12.0  # 10m 参考风速 [m/s]
         self.z_ref = 10.0          # 参考高度 [m]
-        self.alpha = 0.35          # 风切变指数 (城市/森林: 极端)
+        self.alpha = alpha         # 风切变指数 (城市/森林: 极端)
         self.wind_dir = np.deg2rad(45.0)  # 风向 45° (东北风, 气象惯例: 来向)
 
         # ── 湍流 ─────────────────────────────────────
+        # sigma_scale 缩放湍流强度: 1.0=极端(论文工况), 0.25=轻度(默认验证)
+        self.sigma_scale = sigma_scale
         self.turb = DrydenTurbulence(
             dt=dt,
             U0=self.u_ref,
             Lu=150.0, Lv=150.0, Lw=50.0,
-            sigma_u=4.0, sigma_v=4.0, sigma_w=2.5,
+            sigma_u=sigma_u * sigma_scale,
+            sigma_v=sigma_v * sigma_scale,
+            sigma_w=sigma_w * sigma_scale,
         )
 
         # ── 阵风 (1-cos 垂向阵风) ────────────────────
-        self.gust_w_max = 8.0       # 最大垂向阵风 [m/s]
+        self.gust_w_max = gust_w_max  # 最大垂向阵风 [m/s]
         self.gust_H = 15.0          # 半波长 [m]
         self.gust_interval = 20.0   # 阵风间隔 [s]
-        self.gust_prop_speed = self.u_ref  # 阵风传播速度 ≈ 平均风速
+        self.gust_prop_speed = max(self.u_ref, 1.0)  # 阵风传播速度 ≈ 平均风速
 
         self._gust_active = False
         self._gust_t0 = 0.0
@@ -272,12 +278,14 @@ class WindField:
 class WindFieldNode:
     """ROS 节点: 订阅 odometry, 计算风场, 通过 Gazebo 施加气动阻力"""
 
-    def __init__(self, rate_hz=20, debug=False, no_wrench=False, u_ref=12.0):
+    def __init__(self, rate_hz=20, debug=False, no_wrench=False, u_ref=12.0,
+                 sigma_scale=0.25, gust_w_max=2.0):
         rospy.init_node('wind_field_node', log_level=rospy.INFO)
 
         self.dt = 1.0 / rate_hz
         self.debug = debug
-        self.wind = WindField(dt=self.dt, u_ref=u_ref)
+        self.wind = WindField(dt=self.dt, u_ref=u_ref,
+                              sigma_scale=sigma_scale, gust_w_max=gust_w_max)
 
         # 无人机状态
         self._pos = np.zeros(3)       # ENU 位置 [m]
@@ -351,9 +359,9 @@ class WindFieldNode:
         rospy.loginfo("  平均风: %.1f m/s @%dm  幂律 α=%.2f  方向 %d°(来向)",
                       w.u_ref, int(w.z_ref), w.alpha,
                       int(np.degrees(w.wind_dir)))
-        rospy.loginfo("  湍流:  σ_u,v=%.1f  σ_w=%.1f m/s  "
+        rospy.loginfo("  湍流:  σ_u,v=%.1f  σ_w=%.1f m/s  (scale=%.2f)  "
                       "Lu,v=%d  Lw=%dm",
-                      t.sigma_u, t.sigma_w, int(t.Lu), int(t.Lw))
+                      t.sigma_u, t.sigma_w, w.sigma_scale, int(t.Lu), int(t.Lw))
         rospy.loginfo("  阵风:  ±%.0f m/s 垂向  半波长 %dm  间隔 ~%ds",
                       w.gust_w_max, w.gust_H, w.gust_interval)
         rospy.loginfo("  气动:  ρ=%.3f  CdA=%.3f m²  施加: %s",
@@ -503,8 +511,21 @@ if __name__ == '__main__':
     parser.add_argument('--no-wrench', action='store_true', help='不施加力,仅记录')
     parser.add_argument('--seed', type=int, default=None, help='随机种子 (可复现风场)')
     parser.add_argument('--u-ref', type=float, default=5.0, help='10m 参考风速 m/s (默认 5)')
+    parser.add_argument('--sigma-scale', type=float, default=0.25,
+                        help='湍流强度缩放 (默认 0.25=轻度验证; 1.0=极端论文工况)')
+    parser.add_argument('--gust-w-max', type=float, default=2.0,
+                        help='垂向阵风峰值 m/s (默认 2.0; 极端可设 8.0)')
+    parser.add_argument('--extreme', action='store_true',
+                        help='极端档快捷方式: sigma_scale=1.0, gust_w_max=8.0')
     parser.add_argument('--test', action='store_true', help='离线测试 (无需 ROS/Gazebo)')
-    args = parser.parse_args()
+    # parse_known_args 忽略 ROS 附加参数 (__name:=, __log:=, remap)
+    args, _unknown_ros = parser.parse_known_args()
+    # 极端档覆盖
+    sigma_scale = args.sigma_scale
+    gust_w_max = args.gust_w_max
+    if args.extreme:
+        sigma_scale = 1.0
+        gust_w_max = 8.0
     # 固定随机种子
     if args.seed is not None:
         np.random.seed(args.seed)
@@ -517,7 +538,9 @@ if __name__ == '__main__':
             WindFieldNode(rate_hz=args.rate,
                           debug=args.debug,
                           no_wrench=args.no_wrench,
-                          u_ref=args.u_ref).run()
+                          u_ref=args.u_ref,
+                          sigma_scale=sigma_scale,
+                          gust_w_max=gust_w_max).run()
         except rospy.ROSInterruptException:
             pass
         except KeyboardInterrupt:
