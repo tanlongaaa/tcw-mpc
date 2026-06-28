@@ -33,6 +33,8 @@ GAZEBO_IRIS = {
     'C_T':          5.84e-6,    # N/(rad/s)²  motorConstant: T = C_T·ω²
     'moment_const': 0.06,       # 反扭矩系数 (yaw drag torque = moment_const·T)
     'omega_max':    1100.0,     # rad/s
+    'omega_offset': 100.0,      # Gazebo zero_position_armed: ω = scaling·u + offset
+    'omega_scaling': 1000.0,    # Gazebo input_scaling (线性 u→ω)
     'n_rotors':     4,
     'rotor_radius': 0.128,      # m  (iris)
     'rho':          1.225,      # kg/m³
@@ -84,9 +86,16 @@ class RotorPowerModel:
     # ── 输入适配: 仿真归一化指令 → 转速 ──
     def omegas_from_motor_cmd(self, cmd):
         """PX4 归一化电机指令 u∈[0,1] → ω [rad/s].
-        Gazebo 推力线性于指令 → T=u·T_max → ω=ω_max·√u (因 T∝ω²)."""
+        Gazebo iris.sdf: ω = input_scaling·u + zero_position_armed (线性).
+        实测验证 (2026-06-28 SITL): 悬停 PWM=1707us→u=0.707→ω=807 rad/s,
+        T=4·C_T·ω²=15.2N ≈ mg(14.7N), 误差 +3.4%."""
         cmd = np.clip(np.asarray(cmd, dtype=float), 0.0, 1.0)
-        return self.p['omega_max'] * np.sqrt(cmd)
+        return self.p['omega_scaling'] * cmd + self.p['omega_offset']
+
+    @staticmethod
+    def pwm_to_cmd(pwm):
+        """PX4 PWM [us] → 归一化指令 u = (pwm-1000)/1000."""
+        return (np.asarray(pwm, dtype=float) - 1000.0) / 1000.0
 
     # ── 输入适配: 实机 ESC RPM → 转速 ──
     @staticmethod
@@ -119,11 +128,11 @@ def _self_check():
     # 悬停 (4 旋翼均在 ω_hover)
     P_hover = m.power_from_omegas([m.omega_hover]*4)
     print(f"悬停电功率 = {P_hover:.1f} W  (真实 1.5kg 四旋翼 150-180W, 同量级✓)")
-    # 悬停油门指令验证
-    u_h = (m.omega_hover / m.p['omega_max'])**2
-    print(f"悬停归一化指令 u_hover = {u_h:.3f}")
-    Pc = m.power_from_motor_cmd([u_h]*4)
-    print(f"由指令算功率 = {Pc:.1f} W  (应≈悬停功率)")
+    # 悬停油门验证 (实测标定: SITL 悬停 PWM=1707us→u=0.707)
+    u_h = (m.omega_hover - m.p['omega_offset']) / m.p['omega_scaling']
+    print(f"悬停归一化指令 u_hover = {u_h:.3f}  (SITL实测 0.707, 误差 {(u_h/0.707-1)*100:+.1f}%)")
+    Pc = m.power_from_motor_cmd([0.707]*4)
+    print(f"由实测指令 u=0.707 算功率 = {Pc:.1f} W")
     # 前飞 power curve (验证 U 形)
     print("\n前飞 power curve (轴向爬升=0, 扫桨盘平面来流):")
     print(f"{'v_perp':>7} {'P(W)':>8}")
