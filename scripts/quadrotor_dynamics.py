@@ -145,6 +145,19 @@ def quat_to_euler(q):
     return np.array([roll, pitch, yaw])
 
 
+def euler_to_quat(roll, pitch, yaw):
+    """ZYX Euler 角 (rad) → 四元数 [qw,qx,qy,qz] (归一化)"""
+    cr, sr = np.cos(roll*0.5), np.sin(roll*0.5)
+    cp, sp = np.cos(pitch*0.5), np.sin(pitch*0.5)
+    cy, sy = np.cos(yaw*0.5), np.sin(yaw*0.5)
+    qw = cr*cp*cy + sr*sp*sy
+    qx = sr*cp*cy - cr*sp*sy
+    qy = cr*sp*cy + sr*cp*sy
+    qz = cr*cp*sy - sr*sp*cy
+    q = np.array([qw, qx, qy, qz])
+    return q / np.linalg.norm(q)
+
+
 def quat_exp_map(omega, dt):
     """角速度指数映射: q = exp(ω*dt/2)"""
     omega = np.asarray(omega)
@@ -338,7 +351,7 @@ HOVER_U = np.array([IRIS['mass'] * IRIS['g'], 0.0, 0.0, 0.0])  # 悬停控制: f
 G_VEC = np.array([0.0, 0.0, -IRIS['g']])  # 重力加速度 ENU
 
 
-def quadrotor_dynamics_10d(x, u, wind_enu, params=None):
+def quadrotor_dynamics_10d(x, u, wind_enu, params=None, d_acc=None):
     """
     10D CTBR 四旋翼动力学 (连续时间, ENU 系)
 
@@ -409,11 +422,13 @@ def quadrotor_dynamics_10d(x, u, wind_enu, params=None):
 
     m = params['mass']
     v_dot = F_thrust_enu / m + G_VEC + F_drag / m
+    if d_acc is not None:
+        v_dot = v_dot + d_acc   # offset-free: 集总外力/模型失配加性加速度补偿
 
     return np.concatenate([p_dot, q_dot, v_dot])
 
 
-def quadrotor_dynamics_10d_discrete(x, u, wind_enu, dt, params=None):
+def quadrotor_dynamics_10d_discrete(x, u, wind_enu, dt, params=None, d_acc=None):
     """
     10D CTBR 离散动力学 (用于 iLQR 前向推演)
 
@@ -454,6 +469,8 @@ def quadrotor_dynamics_10d_discrete(x, u, wind_enu, dt, params=None):
 
     m = params['mass']
     v_next = v + dt * (F_thrust_enu / m + G_VEC + F_drag / m)
+    if d_acc is not None:
+        v_next = v_next + dt * d_acc   # offset-free: 集总扰动加速度
 
     return np.concatenate([p_next, q_next, v_next])
 

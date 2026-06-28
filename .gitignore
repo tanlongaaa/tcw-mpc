@@ -22,3 +22,7 @@ Thumbs.db
 # Auto-generated logs & plots (can always regenerate)
 scripts/*.csv
 scripts/*.png
+
+# MPC run logs
+scripts/mpc_log_*.csv
+pid_log_*.csv
