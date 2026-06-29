@@ -13,6 +13,7 @@ mpc_components.py — TCW-MPC 控制组件
 """
 
 import collections
+import os
 import numpy as np
 
 
@@ -219,6 +220,16 @@ class CMAManager:
     def update(self, wind_meas, mpc_u_pred=None):
         w_mag = np.linalg.norm(wind_meas)
         self._q_dyn = 0.5 * self.rho * w_mag**2
+
+        # ★ 10D CTBR 默认不收缩 (2026-06-29 离线闭环决定性证据):
+        # 原逻辑风大(q_dyn≥60)把推力上限砸到 13.5N(×0.5), 但大倾角抗风需
+        # mg/cos(倾角)>24N → 推力被饥死→掉高→更斜→发散。离线闭环: 12m/s 侧风下
+        # CMA开→t=2.7s 掉地(推力冻在13.5N); CMA关→稳定(抬23°迮风, maxfc16N)。
+        # CMA 原为 6D Euler 防执行器饱和设计, 用在 10D CTBR 逻辑反了。
+        # 6D 保留原行为; env CMA_THRUST_SHRINK=0 可强制关闭 (含 6D)。
+        if os.environ.get('CMA_THRUST_SHRINK', '1') == '0' or self.model != '6d':
+            self._mode = 'normal'
+            return self.u_min_nom.copy(), self.u_max_nom.copy()
 
         if self._q_dyn < 20.0:
             self._mode = 'normal'

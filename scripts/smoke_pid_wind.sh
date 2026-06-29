@@ -27,7 +27,7 @@ cleanup(){
         [[ -n "$pid" ]] && kill "$pid" 2>/dev/null || true
     done
     pkill -f "wind_field.py" 2>/dev/null || true
-    pkill -f "mpc_node.py" 2>/dev/null || true
+    pkill -f "pid_baseline.py" 2>/dev/null || true
     pkill -f "mavros_node" 2>/dev/null || true
     pkill -f "backend_main" 2>/dev/null || true
     pkill -f "px4.*none_iris" 2>/dev/null || true
@@ -44,7 +44,7 @@ log "roscore OK | seed=$SEED u_ref=${U_REF}m/s"
 
 pkill -f "backend_main.py" 2>/dev/null || true
 pkill -f "mavros_node" 2>/dev/null || true
-pkill -f "mpc_node.py" 2>/dev/null || true
+pkill -f "pid_baseline.py" 2>/dev/null || true
 pkill -f "wind_field.py" 2>/dev/null || true
 sleep 1
 
@@ -80,11 +80,11 @@ set_p MPC_Z_VEL_P_ACC "real: 4.0"
 set_p MPC_Z_VEL_I_ACC "real: 2.0"
 set_p MPC_TILTMAX_AIR "real: 45.0"
 
-log "Step5 mpc_node.py (目标 0,0,${TARGET_Z})"
+log "Step5 pid_baseline.py (目标 0,0,${TARGET_Z})"
 cd "$OFFB_DIR"
-PYTHONUNBUFFERED=1 rosrun offboard_test mpc_node.py &>/tmp/wind_mpc.log &
+PYTHONUNBUFFERED=1 rosrun offboard_test pid_baseline.py &>/tmp/wind_pid.log &
 MPC_PID=$!
-for i in $(seq 1 30); do sleep 1; kill -0 "$MPC_PID" 2>/dev/null || { log "ERR mpc_node 退出"; tail -25 /tmp/wind_mpc.log; exit 1; }; rostopic echo /mavros/state -n1 2>/dev/null | grep -q "armed: True" && { log "已解锁 (${i}s)"; break; }; done
+for i in $(seq 1 30); do sleep 1; kill -0 "$MPC_PID" 2>/dev/null || { log "ERR mpc_node 退出"; tail -25 /tmp/wind_pid.log; exit 1; }; rostopic echo /mavros/state -n1 2>/dev/null | grep -q "armed: True" && { log "已解锁 (${i}s)"; break; }; done
 
 log "Step6 无风稳定 ${WARMUP_HOLD}s ..."
 for ((t=5; t<=WARMUP_HOLD; t+=5)); do
@@ -128,8 +128,8 @@ PYEOF
 PROBE=$!
 wait $PROBE 2>/dev/null
 
-log "===== MPC 末段日志 ====="
-tail -6 /tmp/wind_mpc.log | sed 's/^/[mpc] /'
+log "===== PID 末段日志 ====="
+tail -6 /tmp/wind_pid.log | sed 's/^/[pid] /'
 LATEST_CSV=$(ls -t "$OFFB_DIR"/mpc_log_*.csv 2>/dev/null | head -1)
 [[ -n "$LATEST_CSV" ]] && log "CSV: $LATEST_CSV ($(wc -l <"$LATEST_CSV") 行)"
 log "极端湍流验证结束, 自动清理"

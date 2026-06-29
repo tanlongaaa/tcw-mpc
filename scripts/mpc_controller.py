@@ -92,6 +92,9 @@ class MPCController:
         # 不同于外置 PI(加在角速率输出后, HIL 会正反馈发散): 这是在预测模型内补偿。
         # 文献: offset-free MPC (Pannocchia & Rawlings 2003), 外力估计 NMPC (Hanover RAL2021)。
         self._d_acc_est = np.zeros(3)
+        # offset-free 观测器开关 (诊断用): MPC_OFFSET_FREE=0 关闭, 强制 d_acc=0。
+        # 怀疑阵风下观测器 wind-up 削推力致发散 (2026-06-29 决定性对照), 用此隔离验证。
+        self._offset_free_on = os.environ.get('MPC_OFFSET_FREE', '1') != '0'
         self._d_obs_tau = 2.0      # 观测器时间常数 s (加长: 平均掉零均值 EKF 噪声)
         self._d_acc_max = 3.0      # 估计幅值上限 m/s² (防发散)
         self._prev_vel = None      # 上步速度, 算实测加速度
@@ -127,14 +130,19 @@ class MPCController:
         # 原 q_xy=15 vs 姿态=12 几乎1:1 → 姿态权重太高压制了为修正位置做的快速倾斜
         # (实测风中 ω 只用到0.07/上限2.0, 位置漂移1.5m)。q_z=40 高度跟踪不变。
         self.Q = np.diag([base_q_xy, base_q_xy, 40.0,   # pos
-                          0.0, 0.5, 0.5, 0.5,            # quat [qw,qx,qy,qz]
+                          0.0, 4.0, 4.0, 3.0,            # quat [qw,qx,qy,qz]
                           8.0, 8.0, 25.0])               # vel
-        # ↑ 四元数项 4→0.5(对齐 px4-mpc 官方 0.1, 留稍高余量防侧翻)。
-        # 官方智慧: 姿态轻轻约束(0.1) + 平滑靠 R_ω 重惩罚(500) 实现。
-        # 原 4 是今晚救侧翻加过头且未配套增大角速率惩罚。位置:姿态 = 40:0.5 = 80:1。
-        # R_ω 50/30→300/200 (对齐 px4-mpc 官方 500): 重惩罚角速率 → 平滑跟踪,
-        # 与姿态软约束(Q_quat=0.5)配套。原为反平衡(姿态硬压+角速率放任)。
-        self.R = np.diag([3.0, 50.0, 50.0, 30.0])        # fc/ω (短时域下 R_ω>50 震荡, 待 P2 长时域后再加)
+        # ↑ 四元数项恢复 v2 已验证值 4/4/3 (2026-06-29 02:40 HIL 拿到有界 0.9m)。
+        # 回退原因: 03:47 commit 曾按 px4-mpc 官方降到 0.5, 但官方"姿态软(0.1)"是与
+        # "角速率重惩罚 R_ω=500"配套的; 而该 commit 把 R_ω 增大推迟到 P2, R_ω 仍 50/30。
+        # 结果 = 姿态软(0.5)+角速率放任(50) 最坏组合 → 姿态裸奔→侧翻发散(09:06 HIL 157m)。
+        # px4-mpc 风格(quat0.1 + R_ω500 + 长时域)留到 P2 作为一次原子改动整体上。
+        self.R = np.diag([3.0, 5.0, 5.0, 3.0])        # fc/ω
+        # ★ R_ω 50→5 (2026-06-29 离线 sweep 决定性诊断): R_ω 是姿态恢复的主节流门。
+        # roll=-25° 误差下: R_ω=50 仅命令 0.18rad/s(10°/s) → 斗不过风力力矩建倾
+        #   → roll 单调 wind-up → 侧翻发散(2026-06-29 四次 HIL 157/156/109/122m 不变量)。
+        # R_ω=5 → 0.60rad/s(34°/s) = 3.3×权限, 足以压住 tilt(实测风驱倾建速~5°/s)。
+        # 注: Q_quat/时域 sweep 几乎不动 wx_cmd → 证明昨夜调 quat 是错旋钮, R_ω 才是。
         if self._energy_first:
             self.Q[_IDX_QX, _IDX_QX] *= self._q_xy_scale
             self.Q[_IDX_QY, _IDX_QY] *= self._q_xy_scale
@@ -355,6 +363,8 @@ class MPCController:
             # 作为 z 外力被观测到, MPC 预测内自动补推力 → 治高度回涨。
             # 与高度积分器分工: 观测器治可预测的推力亏空, 积分器治慢变残差。
             self._d_acc_est = np.clip(self._d_acc_est, -self._d_acc_max, self._d_acc_max)
+        if not self._offset_free_on:
+            self._d_acc_est = np.zeros(3)   # 诊断开关: 关闭 offset-free 观测器
         self._prev_x = x_current.copy()
 
         # Step 1: TCWP 风预测
